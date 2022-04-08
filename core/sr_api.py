@@ -1,10 +1,9 @@
 import os
+from typing import NoReturn
 
-from confluent_kafka.schema_registry.schema_registry_client import SchemaRegistryClient, RegisteredSchema
+from confluent_kafka.schema_registry.schema_registry_client import SchemaRegistryClient, RegisteredSchema, Schema
 from core import ccloud_config
 import json
-from jsondiff.symbols import insert, delete
-from jsondiff import diff
 
 
 class SchemaRegistryAPI:
@@ -24,6 +23,9 @@ class SchemaRegistryAPI:
 
     def get_latest_value_schema(self, model_name: str) -> RegisteredSchema:
         return self._client.get_latest_version(model_name + '-value')
+
+    def change_value_schema(self, model_name: str, schema: str) -> NoReturn:
+        self._client.register_schema(model_name + '-value', Schema(schema, 'AVRO', []))
 
     def get_different_fields(self, old_schema: RegisteredSchema, new_schema: RegisteredSchema) -> dict:
         link_schema = {
@@ -97,7 +99,7 @@ class SchemaRegistryAPI:
         for s in s1_simple_types:
             if s in s2_simple_types:
                 if s1_simple_types[s] != s2_simple_types[s]:
-                    result['changed'][s] = s2_simple_types[s]
+                    result['changed'][s] = (s1_simple_types[s], s2_simple_types[s])
                 elif s1_simple_types[s] == s2_simple_types[s] == 'array':
                     pass
 
@@ -107,5 +109,7 @@ class SchemaRegistryAPI:
 if __name__ == '__main__':
     api = SchemaRegistryAPI(os.getenv('CCLOUD_CONFIG_FILE_PATH'))
     customer = api.get_latest_value_schema('customer')
+    print(customer.schema.schema_str)
     product = api.get_latest_value_schema('receipt')
+    print(product.schema.schema_str)
     print(api.get_different_fields(customer, product))

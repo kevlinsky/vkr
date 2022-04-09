@@ -115,7 +115,7 @@ class Producer:
             self.__change_configuration()
             self.current_schema_changes = None
 
-    def produce(self, value: str, key: str = None) -> NoReturn:
+    def produce(self, value: dict, key: dict = None) -> NoReturn:
         self._producer.produce(topic=self.model_name, key=key, value=value, on_delivery=self.__acked)
         self._producer.poll(0)
         self._producer.flush()

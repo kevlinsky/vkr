@@ -1,4 +1,5 @@
-from typing import Any, List, NoReturn, Optional
+from typing import Any, List, NoReturn, Optional, Dict
+import re
 
 import psycopg2
 import os
@@ -72,7 +73,7 @@ class Database:
                 r.append(row[0])
         return r
 
-    def get_model_fields(self, model_name: str) -> dict[str, List[str]]:
+    def get_model_fields(self, model_name: str) -> Dict[str, List[str]]:
         result = dict()
         db_name = os.getenv('POSTGRES_DB_NAME')
         satellites = self.get_model_satellites(model_name)
@@ -82,6 +83,44 @@ class Database:
             columns = self._cursor.fetchall()
             result[satellite] = columns
         return result
+
+    def delete_link(self, model_name: str, linked_model_name: str) -> NoReturn:
+        links = self.get_model_links(model_name)
+        for link in links:
+            if model_name in link and linked_model_name in link:
+                query = f'DROP TABLE {link}'
+                self._cursor.execute(query)
+                self._connection.commit()
+                break
+
+    def create_link(self, model_name: str, linked_model_name: str) -> NoReturn:
+        hubs = self.get_all_hubs()
+        if linked_model_name in hubs:
+            query = f'CREATE TABLE link_{linked_model_name}_{model_name}(' \
+                    f'{linked_model_name}_id integer not null ' \
+                    f'constraint link_{linked_model_name}_{model_name}_hub_{linked_model_name}_id_fk ' \
+                    f'references hub_{linked_model_name},' \
+                    f'{model_name}_id integer not null ' \
+                    f'constraint link_{linked_model_name}_{model_name}_hub_{model_name}_id_fk ' \
+                    f'references hub_{model_name},' \
+                    'created_at date not_null,' \
+                    'closed_at date' \
+                    ')'
+            self._cursor.execute(query)
+            self._connection.commit()
+
+    def create_satellite(self, model_name: str) -> str:
+        model_satellites = self.get_model_satellites(model_name)
+        table_name = f'satellite_{model_name}_{len(model_satellites)}'
+        query = f'CREATE TABLE {table_name} (' \
+                f'{model_name}_id INTEGER NOT NULL CONSTRAINT {table_name}_hub_{model_name}_id_fk ' \
+                f'REFERENCES hub_{model_name}, ' \
+                f'from_date DATE NOT NULL, ' \
+                f'to_date DATE' \
+                f')'
+        self._cursor.execute(query)
+        self._connection.commit()
+        return table_name
 
     def field_exist(self, field_name: str, table_name: str) -> bool:
         db_name = os.getenv('POSTGRES_DB_NAME')
@@ -96,7 +135,10 @@ class Database:
         return exist
 
     def add_field(self, model_name: str, field_name: str, field_type: str, satellite: str = None) -> NoReturn:
-        if not self.field_exist(field_name, satellite):
+        if '_id' in field_name:
+            linked_model_name = re.sub('_id', '', field_name)
+            self.create_link(model_name, linked_model_name)
+        elif not self.field_exist(field_name, satellite):
             if satellite:
                 query = f'ALTER TABLE {satellite} ADD COLUMN {field_name} {self.avro_to_db_types[field_type]}'
             else:
@@ -105,26 +147,18 @@ class Database:
             self._connection.commit()
 
     def remove_field(self, model_name: str, field_name: str, field_type: str) -> NoReturn:
-        model_fields = self.get_model_fields(model_name)
-        for satellite, columns in model_fields.items():
-            for column in columns:
-                if column[0] == field_name and column[1] == self.avro_to_db_types[field_type]:
-                    query = f'ALTER TABLE {satellite} DROP COLUMN {column[0]}'
-                    self._cursor.execute(query)
-        self._connection.commit()
-
-    def create_new_satellite(self, model_name: str) -> str:
-        model_satellites = self.get_model_satellites(model_name)
-        table_name = f'satellite_{model_name}_{len(model_satellites)}'
-        query = f'CREATE TABLE {table_name} (' \
-                f'{model_name}_id INTEGER NOT NULL CONSTRAINT {table_name}_hub_{model_name}_id_fk ' \
-                f'REFERENCES hub_{model_name}, ' \
-                f'from_date DATE NOT NULL, ' \
-                f'to_date DATE' \
-                f')'
-        self._cursor.execute(query)
-        self._connection.commit()
-        return table_name
+        if '_id' in field_name:
+            linked_model_name = re.sub('_id', '', field_name)
+            self.delete_link(model_name, linked_model_name)
+        else:
+            model_fields = self.get_model_fields(model_name)
+            for satellite, columns in model_fields.items():
+                for column in columns:
+                    if column[0] == field_name and column[1] == self.avro_to_db_types[field_type]:
+                        query = f'ALTER TABLE {satellite} DROP COLUMN {column[0]}'
+                        self._cursor.execute(query)
+                        self._connection.commit()
+                        break
 
     def get_field_satellite(self, model_name: str, field_name: str, field_type: str) -> Optional[str]:
         for satellite, fields in self.get_model_fields(model_name).items():
@@ -138,7 +172,7 @@ class Database:
         model_satellites = self.get_model_satellites(model_name)
         satellite_idx = model_satellites.index(old_field_satellite)
         if satellite_idx == len(model_satellites) - 1:
-            satellite_name = self.create_new_satellite(model_name)
+            satellite_name = self.create_satellite(model_name)
             for field in self.get_model_fields(model_name)[model_satellites[-1]]:
                 if field[0] == field_name:
                     self.add_field(model_name, field[0], new_field_type, satellite_name)

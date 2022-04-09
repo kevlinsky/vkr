@@ -28,11 +28,6 @@ class SchemaRegistryAPI:
         self._client.register_schema(model_name + '-value', Schema(schema, 'AVRO', []))
 
     def get_different_fields(self, old_schema: RegisteredSchema, new_schema: RegisteredSchema) -> dict:
-        link_schema = {
-            'removed': dict(),
-            'added': dict(),
-            'changed': dict()
-        }
         result = {
             'removed': dict(),
             'added': dict(),
@@ -101,6 +96,24 @@ class SchemaRegistryAPI:
                 if s1_simple_types[s] != s2_simple_types[s]:
                     result['changed'][s] = (s1_simple_types[s], s2_simple_types[s])
                 elif s1_simple_types[s] == s2_simple_types[s] == 'array':
+                    result['links'][s] = {
+                        'removed': dict(),
+                        'added': dict(),
+                        'changed': dict()
+                    }
+                    for ss in s1_complex_types[s]:
+                        if ss not in s2_complex_types[s]:
+                            result['links'][s]['removed'][ss] = s1_complex_types[s][ss]
+
+                    for ss in s2_complex_types[s]:
+                        if ss not in s1_complex_types[s]:
+                            result['links'][s]['added'][ss] = s2_complex_types[s][ss]
+
+                    for ss in s1_complex_types[s]:
+                        if ss in s2_complex_types[s]:
+                            if s1_complex_types[s][ss] != s2_complex_types[s][ss]:
+                                result['links'][s]['changed'][ss] = (s1_simple_types[s][ss], s2_complex_types[s][ss])
+                elif s1_simple_types[s] == s2_simple_types[s] == 'record':
                     pass
 
         return result
@@ -108,8 +121,11 @@ class SchemaRegistryAPI:
 
 if __name__ == '__main__':
     api = SchemaRegistryAPI(os.getenv('CCLOUD_CONFIG_FILE_PATH'))
-    customer = api.get_latest_value_schema('customer')
-    print(customer.schema.schema_str)
-    product = api.get_latest_value_schema('receipt')
-    print(product.schema.schema_str)
-    print(api.get_different_fields(customer, product))
+    receipt = api.get_latest_value_schema('receipt')
+    receipt_schema = json.loads(receipt.schema.schema_str)
+    print(receipt_schema)
+    receipt_schema['fields'][-2]['type']['items']['fields'].append({
+        'name': '123',
+        'type': 'integer'
+    })
+    print(api.get_different_fields(receipt, RegisteredSchema(10, Schema(json.dumps(receipt_schema), 'AVRO'), 'receipt-value', 10)))

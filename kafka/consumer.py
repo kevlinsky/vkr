@@ -51,9 +51,8 @@ class Consumer:
                 elif msg.error():
                     print(f'Error occurred: {msg.error()}')
                 else:
-                    model_name = msg.key()
                     model_value = msg.value()
-                    print(f"Consumed record with key {model_name} and value {model_value}")
+                    print(f"Consumed record with value {model_value}")
             except KeyboardInterrupt:
                 break
             except ValueDeserializationError as e:
@@ -68,7 +67,8 @@ class Consumer:
                     self._db.change_field_type(self.model_name, field_name, old_field_type, new_field_type)
                 self._consumer.close()
                 self.__change_configuration(new_schema)
-                print(f'Schema changed for message - {e.kafka_message.value()}')
+                model_value = self._avro_deserializer(e.kafka_message.value(), None)
+                print(f'Schema changed for record - {model_value}')
                 self._consumer.poll(1.0)
 
         self._consumer.close()

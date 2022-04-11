@@ -31,90 +31,45 @@ class SchemaRegistryAPI:
         result = {
             'removed': dict(),
             'added': dict(),
-            'changed': dict(),
-            'links': dict()
+            'changed': dict()
         }
 
         schema1 = json.loads(old_schema.schema.schema_str)
         schema2 = json.loads(new_schema.schema.schema_str)
 
-        s1_simple_types = dict()
-        s2_simple_types = dict()
-        s1_complex_types = dict()
-        s2_complex_types = dict()
+        s1_types = dict()
+        s2_types = dict()
 
         for idx, field in enumerate(schema1['fields']):
             if isinstance(field['type'], str):
                 if 'logicalType' in field:
-                    s1_simple_types[field['name']] = field['logicalType']
+                    s1_types[field['name']] = field['logicalType']
                 else:
-                    s1_simple_types[field['name']] = field['type']
+                    s1_types[field['name']] = field['type']
             else:
-                if 'logicalType' in field['type']:
-                    s1_simple_types[field['name']] = field['type']['logicalType']
-                else:
-                    s1_simple_types[field['name']] = field['type']['type']
-
-                for cfield in schema1['fields'][idx]['type']['items']['fields']:
-                    if schema1['fields'][idx]['name'] not in s1_complex_types:
-                        s1_complex_types[schema1['fields'][idx]['name']] = dict()
-                    if 'logicalType' in cfield:
-                        s1_complex_types[schema1['fields'][idx]['name']][cfield['name']] = cfield['logicalType']
-                    else:
-                        s1_complex_types[schema1['fields'][idx]['name']][cfield['name']] = cfield['type']
+                continue
 
         for idx, field in enumerate(schema2['fields']):
             if isinstance(field['type'], str):
                 if 'logicalType' in field:
-                    s2_simple_types[field['name']] = field['logicalType']
+                    s2_types[field['name']] = field['logicalType']
                 else:
-                    s2_simple_types[field['name']] = field['type']
+                    s2_types[field['name']] = field['type']
             else:
-                if 'logicalType' in field['type']:
-                    s2_simple_types[field['name']] = field['type']['logicalType']
-                else:
-                    s2_simple_types[field['name']] = field['type']['type']
+                continue
 
-                for cfield in schema2['fields'][idx]['type']['items']['fields']:
-                    if schema2['fields'][idx]['name'] not in s2_complex_types:
-                        s2_complex_types[schema2['fields'][idx]['name']] = dict()
-                    if 'logicalType' in cfield:
-                        s2_complex_types[schema2['fields'][idx]['name']][cfield['name']] = cfield['logicalType']
-                    else:
-                        s2_complex_types[schema2['fields'][idx]['name']][cfield['name']] = cfield['type']
+        for s in s1_types:
+            if s not in s2_types:
+                result['removed'][s] = s1_types[s]
 
-        for s in s1_simple_types:
-            if s not in s2_simple_types:
-                result['removed'][s] = s1_simple_types[s]
+        for s in s2_types:
+            if s not in s1_types:
+                result['added'][s] = s2_types[s]
 
-        for s in s2_simple_types:
-            if s not in s1_simple_types:
-                result['added'][s] = s2_simple_types[s]
-
-        for s in s1_simple_types:
-            if s in s2_simple_types:
-                if s1_simple_types[s] != s2_simple_types[s]:
-                    result['changed'][s] = (s1_simple_types[s], s2_simple_types[s])
-                elif s1_simple_types[s] == s2_simple_types[s] == 'array':
-                    result['links'][s] = {
-                        'removed': dict(),
-                        'added': dict(),
-                        'changed': dict()
-                    }
-                    for ss in s1_complex_types[s]:
-                        if ss not in s2_complex_types[s]:
-                            result['links'][s]['removed'][ss] = s1_complex_types[s][ss]
-
-                    for ss in s2_complex_types[s]:
-                        if ss not in s1_complex_types[s]:
-                            result['links'][s]['added'][ss] = s2_complex_types[s][ss]
-
-                    for ss in s1_complex_types[s]:
-                        if ss in s2_complex_types[s]:
-                            if s1_complex_types[s][ss] != s2_complex_types[s][ss]:
-                                result['links'][s]['changed'][ss] = (s1_simple_types[s][ss], s2_complex_types[s][ss])
-                elif s1_simple_types[s] == s2_simple_types[s] == 'record':
-                    pass
+        for s in s1_types:
+            if s in s2_types:
+                if s1_types[s] != s2_types[s]:
+                    result['changed'][s] = (s1_types[s], s2_types[s])
 
         return result
 
@@ -124,7 +79,8 @@ if __name__ == '__main__':
     receipt = api.get_latest_value_schema('receipt')
     receipt_schema = json.loads(receipt.schema.schema_str)
     print(receipt_schema)
-    receipt_schema['fields'][-2]['type']['items']['fields'].append({
+    receipt_schema['fields'].pop(1)
+    receipt_schema['fields'].append({
         'name': '123',
         'type': 'integer'
     })

@@ -53,6 +53,7 @@ class Consumer:
                 else:
                     model_value = msg.value()
                     print(f"Consumed record with value {model_value}")
+                    self._db.put_model_data(self.model_name, model_value)
             except KeyboardInterrupt:
                 break
             except ValueDeserializationError as e:
@@ -69,6 +70,7 @@ class Consumer:
                 self.__change_configuration(new_schema)
                 model_value = self._avro_deserializer(e.kafka_message.value(), None)
                 print(f'Schema changed for record - {model_value}')
+                self._db.put_model_data(self.model_name, model_value)
                 self._consumer.poll(1.0)
 
         self._consumer.close()

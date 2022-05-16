@@ -131,12 +131,11 @@ if __name__ == '__main__':
     })
     time.sleep(5)
     producer.remove_field('postal_code')
-    producer.change_field_name('bk', 'pk')
     producer.change_field_type('employee_count', 'int', 'string')
     producer.add_field('date_joined', 'int', 'date')
     producer.commit_schema_changes()
     producer.produce({
-        'pk': 2,
+        'bk': 1,
         'description': 'second description',
         'employee_count': '123',
         'date_joined': int(datetime.now().timestamp() / 60 / 60 / 24)

@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Any, List, NoReturn, Optional, Dict
 import re
 
@@ -138,7 +139,7 @@ class Database:
         if '_id' in field_name:
             linked_model_name = re.sub('_id', '', field_name)
             self.create_link(model_name, linked_model_name)
-        elif not self.field_exist(field_name, satellite):
+        elif field_name != 'bk' and not self.field_exist(field_name, satellite):
             if satellite:
                 query = f'ALTER TABLE {satellite} ADD COLUMN {field_name} {self.avro_to_db_types[field_type]}'
             else:
@@ -150,7 +151,7 @@ class Database:
         if '_id' in field_name:
             linked_model_name = re.sub('_id', '', field_name)
             self.delete_link(model_name, linked_model_name)
-        else:
+        elif field_name != 'bk':
             model_fields = self.get_model_fields(model_name)
             for satellite, columns in model_fields.items():
                 for column in columns:
@@ -168,6 +169,9 @@ class Database:
         return None
 
     def change_field_type(self, model_name: str, field_name: str, old_field_type: str, new_field_type: str) -> NoReturn:
+        if field_name == 'bk':
+            return
+
         old_field_satellite = self.get_field_satellite(model_name, field_name, old_field_type)
         model_satellites = self.get_model_satellites(model_name)
         satellite_idx = model_satellites.index(old_field_satellite)
@@ -181,7 +185,75 @@ class Database:
         else:
             self.add_field(model_name, field_name, new_field_type, model_satellites[satellite_idx + 1])
 
+    def get_model_id(self, model_name: str, bk: int) -> int:
+        query = f'SELECT id FROM hub_{model_name} WHERE bk = {bk}'
+        self._cursor.execute(query)
+        idx = self._cursor.fetchone()
+        return int(idx[0])
+
+    def put_link_data(self, model_name: str, model_idx: int, linked_model_name: str, value: Any) -> NoReturn:
+        existing_links = self.get_model_links(model_name)
+        target_link = None
+        for link in existing_links:
+            if model_name in link and linked_model_name in link:
+                target_link = link
+                break
+
+        if target_link:
+            query = f'UPDATE {target_link} SET closed_at = %s WHERE {model_name}_id = %s ' \
+                    f'AND {linked_model_name}_id = %s AND closed_at IS NULL'
+            self._cursor.execute(query, (date.today(), model_idx, value))
+            self._connection.commit()
+
+            query = f'INSERT INTO {target_link} ({model_name}_id, {linked_model_name}_id, created_at, closed_at) VALUES' \
+                    f'(%s, %s, %s, %s)'
+            self._cursor.execute(query, (model_idx, value, date.today(), None))
+            self._connection.commit()
+
+    def put_satellite_data(self, model_idx: int, model_name: str, satellite_name: str, data: dict) -> NoReturn:
+        for model_satellite in self.get_model_satellites(model_name):
+            query = f'UPDATE {model_satellite} SET from_date = %s WHERE {model_name}_id = %s ' \
+                    f'AND to_date IS NULL'
+            self._cursor.execute(query, (date.today(), model_idx))
+        self._connection.commit()
+
+        fields = ', '.join(data.keys())
+        values = ', '.join(['%s' for _ in data.values()])
+        query = f'INSERT INTO {satellite_name} ({fields}, from_date, to_date) VALUES ({values}, %s, %s)'
+        values_list = list(data.values())
+        values_list.append(date.today())
+        values_list.append(None)
+        self._cursor.execute(query, tuple(values_list))
+        self._connection.commit()
+
+    def put_hub_data(self, model_name: str, bk: int) -> NoReturn:
+        query = f'SELECT COUNT(1) FROM hub_{model_name} WHERE bk = {bk}'
+        self._cursor.execute(query)
+        count = self._cursor.fetchone()[0]
+        if not count:
+            query = f'INSERT INTO hub_{model_name} (bk, created_at, closed_at) VALUES (%s, %s, %s)'
+            self._cursor.execute(query, (bk, date.today(), None))
+            self._connection.commit()
+
+    def put_model_data(self, model_name: str, data: dict) -> NoReturn:
+        bk = data.pop('bk', None)
+        if not bk:
+            return
+        self.put_hub_data(model_name, bk)
+        idx = self.get_model_id(model_name, bk)
+
+        satellite_data = dict()
+        satellite_name = self.get_model_satellites(model_name)[-1]
+        for key, value in data.items():
+            if '_id' in key:
+                linked_model_name = re.sub('_id', '', key)
+                self.put_link_data(model_name, idx, linked_model_name, value)
+            else:
+                satellite_data[key] = value
+
+        self.put_satellite_data(idx, model_name, satellite_name, satellite_data)
+
 
 if __name__ == '__main__':
     db = Database()
-    print(db.get_model_satellites('shop'))
+    print(db.get_model_id('customer', 1))

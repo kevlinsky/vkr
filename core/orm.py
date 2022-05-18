@@ -1,3 +1,4 @@
+import json
 from datetime import date
 from typing import Any, List, NoReturn, Optional, Dict
 import re
@@ -37,6 +38,9 @@ class Database:
             'double precision': 'float',
             'date': 'date'
         }
+
+        self.binary_avro_types = ['int', 'string', 'float', 'boolean']
+        self.complex_avro_types = ['date']
 
     def get_all_hubs(self) -> List[Any]:
         db_name = os.getenv('POSTGRES_DB_NAME')
@@ -104,8 +108,8 @@ class Database:
                     f'{model_name}_id integer not null ' \
                     f'constraint link_{linked_model_name}_{model_name}_hub_{model_name}_id_fk ' \
                     f'references hub_{model_name},' \
-                    'created_at date not_null,' \
-                    'closed_at date' \
+                    'from_date date not_null,' \
+                    'to_date date' \
                     ')'
             self._cursor.execute(query)
             self._connection.commit()
@@ -200,27 +204,28 @@ class Database:
                 break
 
         if target_link:
-            query = f'UPDATE {target_link} SET closed_at = %s WHERE {model_name}_id = %s ' \
-                    f'AND {linked_model_name}_id = %s AND closed_at IS NULL'
+            query = f'UPDATE {target_link} SET to_date = %s WHERE {model_name}_id = %s ' \
+                    f'AND {linked_model_name}_id = %s AND to_date IS NULL'
             self._cursor.execute(query, (date.today(), model_idx, value))
             self._connection.commit()
 
-            query = f'INSERT INTO {target_link} ({model_name}_id, {linked_model_name}_id, created_at, closed_at) VALUES' \
+            query = f'INSERT INTO {target_link} ({model_name}_id, {linked_model_name}_id, from_date, to_date) VALUES' \
                     f'(%s, %s, %s, %s)'
             self._cursor.execute(query, (model_idx, value, date.today(), None))
             self._connection.commit()
 
     def put_satellite_data(self, model_idx: int, model_name: str, satellite_name: str, data: dict) -> NoReturn:
         for model_satellite in self.get_model_satellites(model_name):
-            query = f'UPDATE {model_satellite} SET from_date = %s WHERE {model_name}_id = %s ' \
+            query = f'UPDATE {model_satellite} SET to_date = %s WHERE {model_name}_id = %s ' \
                     f'AND to_date IS NULL'
             self._cursor.execute(query, (date.today(), model_idx))
         self._connection.commit()
 
         fields = ', '.join(data.keys())
         values = ', '.join(['%s' for _ in data.values()])
-        query = f'INSERT INTO {satellite_name} ({fields}, from_date, to_date) VALUES ({values}, %s, %s)'
-        values_list = list(data.values())
+        query = f'INSERT INTO {satellite_name} ({model_name}_id, {fields}, from_date, to_date) VALUES (%s, {values}, %s, %s)'
+        values_list = [model_idx, ]
+        values_list += list(data.values())
         values_list.append(date.today())
         values_list.append(None)
         self._cursor.execute(query, tuple(values_list))
@@ -231,11 +236,18 @@ class Database:
         self._cursor.execute(query)
         count = self._cursor.fetchone()[0]
         if not count:
-            query = f'INSERT INTO hub_{model_name} (bk, created_at, closed_at) VALUES (%s, %s, %s)'
+            query = f'INSERT INTO hub_{model_name} (bk, from_date, to_date) VALUES (%s, %s, %s)'
             self._cursor.execute(query, (bk, date.today(), None))
             self._connection.commit()
 
-    def put_model_data(self, model_name: str, data: dict) -> NoReturn:
+    def put_model_data(self, model_name: str, data: dict, latest_value_schema: str) -> NoReturn:
+        schema_fields = json.loads(latest_value_schema)['fields']
+        fields_types = dict()
+        for field in schema_fields:
+            if 'logicalType' in field:
+                fields_types[field['name']] = field['logicalType']
+            else:
+                fields_types[field['name']] = field['type']
         bk = data.pop('bk', None)
         if not bk:
             return
@@ -249,7 +261,11 @@ class Database:
                 linked_model_name = re.sub('_id', '', key)
                 self.put_link_data(model_name, idx, linked_model_name, value)
             else:
-                satellite_data[key] = value
+                if fields_types[key] == 'date':
+                    value = date.fromtimestamp(float(value) * 24 * 60 * 60)
+                    satellite_data[key] = value
+                elif fields_types[key] in self.binary_avro_types:
+                    satellite_data[key] = value
 
         self.put_satellite_data(idx, model_name, satellite_name, satellite_data)
 
